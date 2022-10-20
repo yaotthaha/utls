@@ -132,7 +132,12 @@ func (c *Conn) makeClientHello() (*clientHelloMsg, ecdheParameters, error) {
 
 		curveID := config.curvePreferences()[0]
 		if _, ok := curveForCurveID(curveID); curveID != X25519 && !ok {
-			return nil, nil, errors.New("tls: CurvePreferences includes unsupported curve")
+			// If the first curve is 'GREASE' (in Chrome fingerprint) we skip it
+			// and check again with the second curve; also change := to =
+			curveID = config.curvePreferences()[1]
+			if _, ok := curveForCurveID(curveID); curveID != X25519 && !ok {
+				return nil, nil, errors.New("tls: CurvePreferences includes unsupported curve")
+			}
 		}
 		params, err = generateECDHEParameters(config.rand(), curveID)
 		if err != nil {
