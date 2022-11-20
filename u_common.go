@@ -16,24 +16,27 @@ import (
 // Things, supported by utls, but not crypto/tls' are prefixed with "utls"
 // Supported things, that have changed their ID are prefixed with "Old"
 // Supported but disabled things are prefixed with "Disabled". We will _enable_ them.
+
+// TLS handshake message types.
+const (
+	utlsTypeEncryptedExtensions uint8 = 8 // implemention incomplete by crypto/tls
+	// https://datatracker.ietf.org/doc/html/rfc8879#section-7.2
+	utlsTypeCompressedCertificate uint8 = 25
+)
+
+// TLS
 const (
 	utlsExtensionPadding              uint16 = 21
-	utlsExtensionExtendedMasterSecret uint16 = 23 // https://tools.ietf.org/html/rfc7627
-
-	// https://datatracker.ietf.org/doc/html/rfc8879#section-7.1
-	utlsExtensionCompressCertificate uint16 = 27
+	utlsExtensionExtendedMasterSecret uint16 = 23    // https://tools.ietf.org/html/rfc7627
+	utlsExtensionCompressCertificate  uint16 = 27    // https://datatracker.ietf.org/doc/html/rfc8879#section-7.1
+	utlsExtensionApplicationSettings  uint16 = 17513 // not IANA assigned
+	utlsFakeExtensionCustom           uint16 = 1234  // not IANA assigned, for ALPS
 
 	// extensions with 'fake' prefix break connection, if server echoes them back
 	fakeExtensionTokenBinding         uint16 = 24
-	fakeExtensionChannelIDOld         uint16 = 30031 // not IANA assigned
+	fakeOldExtensionChannelID         uint16 = 30031 // not IANA assigned
 	fakeExtensionChannelID            uint16 = 30032 // not IANA assigned
-	fakeExtensionALPS                 uint16 = 17513 // not IANA assigned
 	fakeExtensionDelegatedCredentials uint16 = 34
-
-	fakeRecordSizeLimit uint16 = 0x001c
-
-	// https://datatracker.ietf.org/doc/html/rfc8879#section-7.2
-	typeCompressedCertificate uint8 = 25
 )
 
 const (
@@ -58,6 +61,11 @@ const (
 
 	// https://docs.microsoft.com/en-us/dotnet/api/system.net.security.tlsciphersuite?view=netcore-3.1
 	FAKE_TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA = uint16(0xc008)
+)
+
+// Other things
+const (
+	fakeRecordSizeLimit uint16 = 0x001c
 )
 
 // newest signatures
@@ -173,16 +181,17 @@ var (
 	HelloFirefox_102  = ClientHelloID{helloFirefox, "102", nil}
 	HelloFirefox_105  = ClientHelloID{helloFirefox, "105", nil}
 
-	HelloChrome_Auto = HelloChrome_102
-	HelloChrome_58   = ClientHelloID{helloChrome, "58", nil}
-	HelloChrome_62   = ClientHelloID{helloChrome, "62", nil}
-	HelloChrome_70   = ClientHelloID{helloChrome, "70", nil}
-	HelloChrome_72   = ClientHelloID{helloChrome, "72", nil}
-	HelloChrome_83   = ClientHelloID{helloChrome, "83", nil}
-	HelloChrome_87   = ClientHelloID{helloChrome, "87", nil}
-	HelloChrome_96   = ClientHelloID{helloChrome, "96", nil}
-	HelloChrome_100  = ClientHelloID{helloChrome, "100", nil}
-	HelloChrome_102  = ClientHelloID{helloChrome, "102", nil}
+	HelloChrome_Auto        = HelloChrome_102
+	HelloChrome_58          = ClientHelloID{helloChrome, "58", nil}
+	HelloChrome_62          = ClientHelloID{helloChrome, "62", nil}
+	HelloChrome_70          = ClientHelloID{helloChrome, "70", nil}
+	HelloChrome_72          = ClientHelloID{helloChrome, "72", nil}
+	HelloChrome_83          = ClientHelloID{helloChrome, "83", nil}
+	HelloChrome_87          = ClientHelloID{helloChrome, "87", nil}
+	HelloChrome_96          = ClientHelloID{helloChrome, "96", nil}
+	HelloChrome_100         = ClientHelloID{helloChrome, "100", nil}
+	HelloChrome_102         = ClientHelloID{helloChrome, "102", nil}
+	HelloChrome_106_Shuffle = ClientHelloID{helloChrome, "106", nil} // beta: shuffler enabled starting from 106
 
 	HelloIOS_Auto = HelloIOS_14
 	HelloIOS_11_1 = ClientHelloID{helloIOS, "111", nil} // legacy "111" means 11.1

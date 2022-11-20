@@ -36,6 +36,8 @@ type clientHandshakeState struct {
 	uconn *UConn // [uTLS]
 }
 
+var testingOnlyForceClientHelloSignatureAlgorithms []SignatureScheme
+
 func (c *Conn) makeClientHello() (*clientHelloMsg, ecdheParameters, error) {
 	config := c.config
 	if len(config.ServerName) == 0 && !config.InsecureSkipVerify {
@@ -119,7 +121,10 @@ func (c *Conn) makeClientHello() (*clientHelloMsg, ecdheParameters, error) {
 	}
 
 	if hello.vers >= VersionTLS12 {
-		hello.supportedSignatureAlgorithms = supportedSignatureAlgorithms
+		hello.supportedSignatureAlgorithms = supportedSignatureAlgorithms()
+	}
+	if testingOnlyForceClientHelloSignatureAlgorithms != nil {
+		hello.supportedSignatureAlgorithms = testingOnlyForceClientHelloSignatureAlgorithms
 	}
 
 	var params ecdheParameters
@@ -600,6 +605,11 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 		}
 	}
 
+	// [UTLS SECTION START]
+	/* sessionHash does not include CertificateVerify */
+	sessionHash := hs.finishedHash.Sum()
+	// [UTLS SECTION END]
+
 	if chainToSend != nil && len(chainToSend.Certificate) > 0 {
 		certVerify := &certificateVerifyMsg{}
 
@@ -648,11 +658,14 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 		}
 	}
 
+	// [UTLS SECTION START]
 	if hs.hello.ems && hs.serverHello.ems {
-		hs.masterSecret = extendedMasterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret, hs.finishedHash)
+		hs.masterSecret = extendedMasterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret, sessionHash)
 	} else {
 		hs.masterSecret = masterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret, hs.hello.random, hs.serverHello.random)
 	}
+	// [UTLS SECTION END]
+
 	if err := c.config.writeKeyLog(keyLogLabelTLS12, hs.hello.random, hs.masterSecret); err != nil {
 		c.sendAlert(alertInternalError)
 		return errors.New("tls: failed to write to key log: " + err.Error())
@@ -668,7 +681,7 @@ func (hs *clientHandshakeState) establishKeys() error {
 
 	clientMAC, serverMAC, clientKey, serverKey, clientIV, serverIV :=
 		keysFromMasterSecret(c.vers, hs.suite, hs.masterSecret, hs.hello.random, hs.serverHello.random, hs.suite.macLen, hs.suite.keyLen, hs.suite.ivLen)
-	var clientCipher, serverCipher interface{}
+	var clientCipher, serverCipher any
 	var clientHash, serverHash hash.Hash
 	if hs.suite.cipher != nil {
 		clientCipher = hs.suite.cipher(clientKey, clientIV, false /* not for reading */)
@@ -872,6 +885,7 @@ func (c *Conn) verifyServerCertificate(certificates [][]byte) error {
 			DNSName:       c.config.ServerName,
 			Intermediates: x509.NewCertPool(),
 		}
+
 		for _, cert := range certs[1:] {
 			opts.Intermediates.AddCert(cert)
 		}

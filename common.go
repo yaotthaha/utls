@@ -89,6 +89,7 @@ const (
 	extensionSupportedPoints         uint16 = 11
 	extensionSignatureAlgorithms     uint16 = 13
 	extensionALPN                    uint16 = 16
+	extensionStatusRequestV2         uint16 = 17
 	extensionSCT                     uint16 = 18
 	extensionDelegatedCredentials    uint16 = 34
 	extensionSessionTicket           uint16 = 35
@@ -100,7 +101,7 @@ const (
 	extensionCertificateAuthorities  uint16 = 47
 	extensionSignatureAlgorithmsCert uint16 = 50
 	extensionKeyShare                uint16 = 51
-	extensionNextProtoNeg            uint16 = 13172 // not IANA assigned
+	extensionNextProtoNeg            uint16 = 13172 // not IANA assigned // Pending discussion on whether or not remove this. crypto/tls removed it on Nov 21, 2019.
 	extensionRenegotiationInfo       uint16 = 0xff01
 )
 
@@ -173,11 +174,11 @@ const (
 // hash function associated with the Ed25519 signature scheme.
 var directSigning crypto.Hash = 0
 
-// supportedSignatureAlgorithms contains the signature and hash algorithms that
+// defaultSupportedSignatureAlgorithms contains the signature and hash algorithms that
 // the code advertises as supported in a TLS 1.2+ ClientHello and in a TLS 1.2+
 // CertificateRequest. The two fields are merged to match with TLS 1.3.
 // Note that in TLS 1.2, the ECDSA algorithms are not constrained to P-256, etc.
-var supportedSignatureAlgorithms = []SignatureScheme{
+var defaultSupportedSignatureAlgorithms = []SignatureScheme{
 	PSSWithSHA256,
 	ECDSAWithP256AndSHA256,
 	Ed25519,
@@ -236,6 +237,10 @@ type ConnectionState struct {
 	//
 	// Deprecated: this value is always true.
 	NegotiatedProtocolIsMutual bool
+
+	// PeerApplicationSettings is the Application-Layer Protocol Settings (ALPS)
+	// provided by peer.
+	PeerApplicationSettings []byte // [uTLS]
 
 	// ServerName is the value of the Server Name Indication extension sent by
 	// the client. It's available both on the server and on the client side.
@@ -624,6 +629,10 @@ type Config struct {
 	// ConnectionState.NegotiatedProtocol will be empty.
 	NextProtos []string
 
+	// ApplicationSettings is a set of application settings (ALPS) to use
+	// with each application protocol (ALPN).
+	ApplicationSettings map[string][]byte // [uTLS]
+
 	// ServerName is used to verify the hostname on the returned
 	// certificates unless InsecureSkipVerify is given. It is also included
 	// in the client's handshake to support virtual hosting unless it is
@@ -799,6 +808,7 @@ func (c *Config) Clone() *Config {
 		VerifyConnection:            c.VerifyConnection,
 		RootCAs:                     c.RootCAs,
 		NextProtos:                  c.NextProtos,
+		ApplicationSettings:         c.ApplicationSettings,
 		ServerName:                  c.ServerName,
 		ClientAuth:                  c.ClientAuth,
 		ClientCAs:                   c.ClientCAs,
@@ -962,6 +972,9 @@ func (c *Config) time() time.Time {
 }
 
 func (c *Config) cipherSuites() []uint16 {
+	if needFIPS() {
+		return fipsCipherSuites(c)
+	}
 	if c.CipherSuites != nil {
 		return c.CipherSuites
 	}
@@ -975,10 +988,6 @@ var supportedVersions = []uint16{
 	VersionTLS10,
 }
 
-// debugEnableTLS10 enables TLS 1.0. See issue 45428.
-// [uTLS] disabled TLS 1.0
-var debugEnableTLS10 = false
-
 // roleClient and roleServer are meant to call supportedVersions and parents
 // with more readability at the callsite.
 const roleClient = true
@@ -987,7 +996,10 @@ const roleServer = false
 func (c *Config) supportedVersions(isClient bool) []uint16 {
 	versions := make([]uint16, 0, len(supportedVersions))
 	for _, v := range supportedVersions {
-		if (c == nil || c.MinVersion == 0) && !debugEnableTLS10 &&
+		if needFIPS() && (v < fipsMinVersion(c) || v > fipsMaxVersion(c)) {
+			continue
+		}
+		if (c == nil || c.MinVersion == 0) &&
 			isClient && v < VersionTLS12 {
 			continue
 		}
@@ -1027,6 +1039,9 @@ func supportedVersionsFromMax(maxVersion uint16) []uint16 {
 var defaultCurvePreferences = []CurveID{X25519, CurveP256, CurveP384, CurveP521}
 
 func (c *Config) curvePreferences() []CurveID {
+	if needFIPS() {
+		return fipsCurvePreferences(c)
+	}
 	if c == nil || len(c.CurvePreferences) == 0 {
 		return defaultCurvePreferences
 	}
@@ -1468,7 +1483,7 @@ func defaultConfig() *Config {
 	return &emptyConfig
 }
 
-func unexpectedMessageError(wanted, got interface{}) error {
+func unexpectedMessageError(wanted, got any) error {
 	return fmt.Errorf("tls: received unexpected handshake message of type %T when waiting for %T", got, wanted)
 }
 

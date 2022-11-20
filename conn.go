@@ -92,6 +92,10 @@ type Conn struct {
 	// clientProtocol is the negotiated ALPN protocol.
 	clientProtocol string
 
+	// [UTLS SECTION START]
+	utls utlsConnExtraFields // used for extensive things such as ALPS
+	// [UTLS SECTION END]
+
 	// input/output
 	in, out   halfConn
 	rawInput  bytes.Buffer // raw input, starting with a record header
@@ -164,16 +168,16 @@ func (c *Conn) NetConn() net.Conn {
 type halfConn struct {
 	sync.Mutex
 
-	err     error       // first permanent error
-	version uint16      // protocol version
-	cipher  interface{} // cipher algorithm
+	err     error  // first permanent error
+	version uint16 // protocol version
+	cipher  any    // cipher algorithm
 	mac     hash.Hash
 	seq     [8]byte // 64-bit sequence number
 
 	scratchBuf [13]byte // to avoid allocs; interface method args escape
 
-	nextCipher interface{} // next encryption state
-	nextMac    hash.Hash   // next MAC algorithm
+	nextCipher any       // next encryption state
+	nextMac    hash.Hash // next MAC algorithm
 
 	trafficSecret []byte // current TLS 1.3 traffic secret
 }
@@ -198,7 +202,7 @@ func (hc *halfConn) setErrorLocked(err error) error {
 
 // prepareCipherSpec sets the encryption and MAC states
 // that a subsequent changeCipherSpec will use.
-func (hc *halfConn) prepareCipherSpec(version uint16, cipher interface{}, mac hash.Hash) {
+func (hc *halfConn) prepareCipherSpec(version uint16, cipher any, mac hash.Hash) {
 	hc.version = version
 	hc.nextCipher = cipher
 	hc.nextMac = mac
@@ -761,7 +765,7 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 	return nil
 }
 
-// retryReadRecord recurses into readRecordOrCCS to drop a non-advancing record, like
+// retryReadRecord recurs into readRecordOrCCS to drop a non-advancing record, like
 // a warning alert, empty application_data, or a change_cipher_spec in TLS 1.3.
 func (c *Conn) retryReadRecord(expectChangeCipherSpec bool) error {
 	c.retryCount++
@@ -938,7 +942,7 @@ func (c *Conn) flush() (int, error) {
 
 // outBufPool pools the record-sized scratch buffers used by writeRecordLocked.
 var outBufPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new([]byte)
 	},
 }
@@ -1014,7 +1018,7 @@ func (c *Conn) writeRecord(typ recordType, data []byte) (int, error) {
 
 // readHandshake reads the next handshake message from
 // the record layer.
-func (c *Conn) readHandshake() (interface{}, error) {
+func (c *Conn) readHandshake() (any, error) {
 	for c.hand.Len() < 4 {
 		if err := c.readRecord(); err != nil {
 			return nil, err
@@ -1075,17 +1079,22 @@ func (c *Conn) readHandshake() (interface{}, error) {
 		}
 	case typeFinished:
 		m = new(finishedMsg)
-	case typeEncryptedExtensions:
-		m = new(encryptedExtensionsMsg)
+	// [uTLS] Commented typeEncryptedExtensions to force
+	// utlsHandshakeMessageType to handle it
+	// case typeEncryptedExtensions:
+	// 	m = new(encryptedExtensionsMsg)
 	case typeEndOfEarlyData:
 		m = new(endOfEarlyDataMsg)
 	case typeKeyUpdate:
 		m = new(keyUpdateMsg)
-	// [UTLS SECTION BEGINS]
-	case typeCompressedCertificate:
-		m = new(compressedCertificateMsg)
-	// [UTLS SECTION ENDS]
 	default:
+		// [UTLS SECTION BEGINS]
+		var err error
+		m, err = c.utlsHandshakeMessageType(data[0]) // see u_conn.go
+		if err == nil {
+			break
+		}
+		// [UTLS SECTION ENDS]
 		return nil, c.in.setErrorLocked(c.sendAlert(alertUnexpectedMessage))
 	}
 
@@ -1514,6 +1523,7 @@ func (c *Conn) connectionStateLocked() ConnectionState {
 	} else {
 		state.ekm = c.ekm
 	}
+
 	return state
 }
 
